@@ -1,0 +1,29 @@
+{
+  "name": "Slim4",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:init": "ts-node src/db/init.ts"
+  },
+  "dependencies": {
+    "@solana/web3.js": "*",
+    "better-sqlite3": "*",
+    "dotenv": "*",
+    "express": "*",
+    "jito-ts": "*",
+    "node-telegram-bot-api": "*",
+    "zod": "*"
+  },
+  "devDependencies": {
+    "@types/express": "*",
+    "@types/better-sqlite3": "*",
+    "@types/node": "*",
+    "ts-node": "*",
+    "ts-node-dev": "*",
+    "typescript": "*"
+  }
+}
