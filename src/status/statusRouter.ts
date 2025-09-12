@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import Database from 'better-sqlite3';
 import { AppConfig } from '../config';
+import { getFeedCounters, getFeedStatus } from '../feeds/state';
 
 export function createStatusRouter(db: Database.Database, config: AppConfig) {
   const router = Router();
@@ -48,16 +49,25 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
       // ignore
     }
 
+    const feeds = getFeedCounters();
+    const feedStatus = getFeedStatus();
+
     res.json({
       schemaVersion,
       openPositions,
       todayRealizedPnlSol,
       activeHalts,
       jito: config.jito,
-      riskCaps: { openRiskMaxPct: 18, dailyDrawdownMaxPct: 15, impactMaxPct: 3 }
+      riskCaps: { openRiskMaxPct: 18, dailyDrawdownMaxPct: 15, impactMaxPct: 3 },
+      tokensSeen24h: feeds.tokensSeen24h,
+      tokensInserted24h: feeds.tokensInserted24h,
+      feeds: {
+        subscribedPrograms: feedStatus.subscribedPrograms,
+        byOrigin: feedStatus.byOrigin,
+        lastEventTs: feedStatus.lastEventTs
+      }
     });
   });
 
   return router;
 }
-
