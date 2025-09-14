@@ -27,6 +27,20 @@ const EnvSchema = z.object({
   MOONSHOT_PROGRAM_IDS: z.string().default(""),
   RAYDIUM_PROGRAM_IDS: z.string().default(""),
   ORCA_PROGRAM_IDS: z.string().default("")
+  ,
+  // Unitary Entry Engine / Dry run
+  DRY_RUN: z.coerce.boolean().default(true),
+  SIZE_SMALL_USD: z.coerce.number().default(30),
+  SIZE_APEX_USD: z.coerce.number().default(120),
+  ENTRY_MIN_SCORE: z.coerce.number().default(60),
+  ENTRY_APEX_SCORE: z.coerce.number().default(80),
+  DECISION_COOLDOWN_SEC: z.coerce.number().default(120),
+
+  // Alerts / Telegram noise control
+  ALERTS_ACCEPTED_ONLY: z.coerce.boolean().default(false),
+  ALERTS_MIN_SCORE: z.coerce.number().default(0),
+  ALERTS_RATE_LIMIT_SEC: z.coerce.number().default(1),
+  ALERTS_SUMMARY_EVERY_SEC: z.coerce.number().default(0)
 });
 
 const parsed = EnvSchema.parse(process.env);
@@ -52,6 +66,12 @@ export type AppConfig = Readonly<{
     botToken: string;
     chatId: string;
   };
+  alerts: Readonly<{
+    acceptedOnly: boolean;
+    minScore: number;
+    rateLimitSec: number;
+    summaryEverySec: number; // 0 disables
+  }>;
   feedsEnabled: boolean;
   programs: Readonly<{
     pumpfun: string[];
@@ -60,6 +80,9 @@ export type AppConfig = Readonly<{
     raydium: string[];
     orca: string[];
   }>;
+  dryRun: boolean;
+  sizes: Readonly<{ smallUsd: number; apexUsd: number }>;
+  entry: Readonly<{ minScore: number; apexScore: number; cooldownSec: number }>;
 }>;
 
 function parseCsvPrograms(raw: string): string[] {
@@ -95,6 +118,12 @@ export const config: AppConfig = Object.freeze({
     botToken: parsed.TELEGRAM_BOT_TOKEN,
     chatId: parsed.TELEGRAM_CHAT_ID
   },
+  alerts: {
+    acceptedOnly: parsed.ALERTS_ACCEPTED_ONLY,
+    minScore: parsed.ALERTS_MIN_SCORE,
+    rateLimitSec: parsed.ALERTS_RATE_LIMIT_SEC,
+    summaryEverySec: parsed.ALERTS_SUMMARY_EVERY_SEC
+  },
   feedsEnabled: parsed.FEEDS_ENABLED,
   programs: {
     pumpfun: parseCsvPrograms(parsed.PUMPFUN_PROGRAM_IDS),
@@ -102,5 +131,8 @@ export const config: AppConfig = Object.freeze({
     moonshot: parseCsvPrograms(parsed.MOONSHOT_PROGRAM_IDS),
     raydium: parseCsvPrograms(parsed.RAYDIUM_PROGRAM_IDS),
     orca: parseCsvPrograms(parsed.ORCA_PROGRAM_IDS)
-  }
+  },
+  dryRun: parsed.DRY_RUN,
+  sizes: { smallUsd: parsed.SIZE_SMALL_USD, apexUsd: parsed.SIZE_APEX_USD },
+  entry: { minScore: parsed.ENTRY_MIN_SCORE, apexScore: parsed.ENTRY_APEX_SCORE, cooldownSec: parsed.DECISION_COOLDOWN_SEC }
 });

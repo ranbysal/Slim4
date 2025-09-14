@@ -1,0 +1,20 @@
+import type { Origin } from '../config';
+import type { MicroSnapshot } from '../risk/safetyGate';
+
+export type Conviction = { score: number; buckets: Record<string, number>; reasons: string[] };
+
+export function convictionFromMicro(snapshot: MicroSnapshot, _origin: Origin): Conviction {
+  let score = 0;
+  const buckets: Record<string, number> = {};
+  const reasons: string[] = [];
+
+  if (snapshot.buyers >= 8) { score += 30; buckets.buyers = 30; reasons.push('buyers>=8 +30'); }
+  if (snapshot.uniqueFunders >= 6) { score += 20; buckets.funders = 20; reasons.push('uniqueFunders>=6 +20'); }
+  if (snapshot.priceJumps >= 2) { score += 20; buckets.jumps = 20; reasons.push('priceJumps>=2 +20'); }
+  if (snapshot.depthEst >= 0.35) { score += 20; buckets.depth = 20; reasons.push('depthEst>=0.35 +20'); }
+  if (snapshot.sameFunderRatio > 0.60) { score -= 20; buckets.sameFunder = -20; reasons.push('sameFunderRatio>0.60 -20'); }
+
+  score = Math.max(0, Math.min(100, score));
+  return { score, buckets, reasons };
+}
+

@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import { Connection, LogsCallback, PublicKey } from '@solana/web3.js';
 import { AppConfig, Origin } from '../config';
+import { trackFirstN } from '../microstructure/firstNBlocks';
+import { evaluateMint } from '../trader/entryEngine';
 import { logger } from '../utils/logger';
 import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms } from './state';
 import { sendTelegram } from '../utils/telegram';
@@ -34,6 +36,7 @@ export class SolanaLaunchWatcher {
   private lastStableSince = Date.now();
   private onReconnectLoopAlerted = false;
   private stopped = false;
+  private lastDecisionTs: Map<string, number> = new Map();
 
   constructor(db: Database.Database, config: AppConfig) {
     this.db = db;
@@ -134,6 +137,17 @@ export class SolanaLaunchWatcher {
         try {
           const evt = this.parseLogs(programIdStr, origin, logs.logs);
           if (!evt) return;
+          // microstructure ingest (best-effort, non-blocking)
+          try { trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')); } catch {}
+          // Evaluate unitary entry decision with cooldown debounce
+          try {
+            const last = this.lastDecisionTs.get(evt.mint) || 0;
+            const cooldownMs = (this.config.entry?.cooldownSec || 60) * 1000;
+            if (evt.ts - last >= cooldownMs) {
+              this.lastDecisionTs.set(evt.mint, evt.ts);
+              evaluateMint(evt.mint, origin, evt.ts).catch(() => {});
+            }
+          } catch {}
           this.handleEvent(evt);
         } catch (e) {
           logger.debug('Parse log error:', e);
