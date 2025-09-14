@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { AppConfig, Origin } from '../config';
 import { logger } from './logger';
+import { getHeatStatus } from '../market/heat';
 
 let bot: TelegramBot | null = null;
 let cachedToken = '';
@@ -64,7 +65,9 @@ function ensureSummaryTimer(config: AppConfig) {
         .map(([r]) => r);
       const byOrigin: Record<string, number> = {};
       for (const [k, v] of originCounts.entries()) byOrigin[k] = v;
-      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected}`;
+      const heat = getHeatStatus(Date.now());
+      const eff = heat.effective;
+      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected} | heat: ${heat.band} a/h:${heat.acceptsPerHr} eff:${eff.minScore}/${eff.apexScore}/${eff.minBuyers}/${eff.minUnique}`;
       // best-effort send respecting rate-limit
       sendTelegram(cfgRef, msg).catch(() => {});
     } catch {}

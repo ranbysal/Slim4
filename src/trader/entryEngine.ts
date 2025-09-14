@@ -5,6 +5,7 @@ import { safetyGate } from '../risk/safetyGate';
 import { convictionFromMicro } from '../alpha/conviction';
 import { bumpSummary, sendDecisionAlert } from '../utils/telegram';
 import { logger } from '../utils/logger';
+import { getEffectiveThresholds, recordAccept as recordHeatAccept } from '../market/heat';
 
 let db: Database.Database | null = null;
 
@@ -44,6 +45,8 @@ type MintDecisionState = {
   lastDecision: LastDecision;
   lastAcceptedTs?: number;
   stickyFatal?: boolean;
+  reevalCount: number;
+  ttlExpired?: boolean;
 };
 
 const states: Map<string, MintDecisionState> = new Map();
@@ -56,11 +59,11 @@ function mintShort(m: string): string {
   return `${m.slice(0, 4)}…${m.slice(-4)}`;
 }
 
-export async function evaluateMint(mint: string, origin: Origin, nowTs: number): Promise<void> {
+export async function evaluateMint(mint: string, origin: Origin, nowTs: number, creator?: string): Promise<void> {
   try {
     let st = states.get(mint);
     if (!st) {
-      st = { firstSeenTs: nowTs, lastEvalTs: 0, bestScore: 0, lastDecision: 'hold' };
+      st = { firstSeenTs: nowTs, lastEvalTs: 0, bestScore: 0, lastDecision: 'hold', reevalCount: 0 };
       states.set(mint, st);
     }
     // sticky fatal: never re-evaluate
@@ -69,14 +72,31 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number):
     const reevalMs = (config.entry.reevalCooldownSec || 15) * 1000;
     if (st.lastEvalTs > 0 && nowTs - st.lastEvalTs < reevalMs) return;
     st.lastEvalTs = nowTs;
+    st.reevalCount = (st.reevalCount || 0) + 1;
+
+    // TTL drop from pending state
+    const ttlMs = Math.max(0, (config.entry.holdTtlSec || 0) * 1000);
+    const maxReevals = Math.max(0, config.entry.holdMaxReevals || 0);
+    if (!st.ttlExpired && st.lastDecision === 'hold' && (
+      (ttlMs > 0 && nowTs - st.firstSeenTs > ttlMs) ||
+      (maxReevals > 0 && st.reevalCount >= maxReevals)
+    )) {
+      st.lastDecision = 'rejected_soft';
+      st.ttlExpired = true;
+      softRejectEvents.push(nowTs);
+      try { bumpSummary({ mint, origin, status: 'rejected_soft', score: 0, tier: 'REJECT', reasons: ['hold_ttl'] }); } catch {}
+      return;
+    }
 
     const snapshot = getSnapshot(mint);
+    // Heat-adjusted effective thresholds
+    const eff = getEffectiveThresholds(nowTs);
     const verdict = safetyGate(snapshot, origin);
 
     const d = getDb();
     ensureOrdersDecisionColumns(d);
     // Deferred observation gate
-    if (snapshot.buyers < (config.entry.minObsBuyers || 0) || snapshot.uniqueFunders < (config.entry.minObsUnique || 0)) {
+    if (snapshot.buyers < (eff.minBuyers || 0) || snapshot.uniqueFunders < (eff.minUnique || 0)) {
       st.lastDecision = 'hold';
       try { bumpSummary({ mint, origin, status: 'hold', score: 0, tier: 'REJECT' }); } catch {}
       return;
@@ -127,11 +147,11 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number):
     }
 
     // Gate passed — compute conviction
-    const conv = convictionFromMicro(snapshot, origin);
+    const conv = convictionFromMicro(snapshot, origin, mint, nowTs, creator);
     st.bestScore = Math.max(st.bestScore, conv.score);
     let tier: 'APEX' | 'SMALL' | 'REJECT' = 'REJECT';
-    if (conv.score >= (config.entry.apexScore || 75)) tier = 'APEX';
-    else if (conv.score >= (config.entry.minScore || 50)) tier = 'SMALL';
+    if (conv.score >= (eff.apexScore || 75)) tier = 'APEX';
+    else if (conv.score >= (eff.minScore || 50)) tier = 'SMALL';
 
     if (tier === 'REJECT') {
       // remain on hold when score isn't there yet
@@ -179,6 +199,9 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number):
       bumpSummary(decision as any);
       await sendDecisionAlert(config, decision as any, snapshot);
     } catch {}
+    try {
+      if (status === 'dry_run') recordHeatAccept(nowTs);
+    } catch {}
   } catch (e) {
     logger.warn('evaluateMint error:', (e as Error)?.message ?? e);
   }
@@ -190,7 +213,14 @@ export function getDecisionStats(): { pending24h: number; softRejected24h: numbe
   // pending: mints currently in 'hold' with recent evaluation within 24h
   let pending = 0;
   for (const st of states.values()) {
-    if (st.lastDecision === 'hold' && now - (st.lastEvalTs || st.firstSeenTs) <= dayMs) pending += 1;
+    const ttlMs = Math.max(0, (config.entry.holdTtlSec || 0) * 1000);
+    const maxReevals = Math.max(0, config.entry.holdMaxReevals || 0);
+    if (
+      st.lastDecision === 'hold' &&
+      now - (st.lastEvalTs || st.firstSeenTs) <= dayMs &&
+      (ttlMs === 0 || now - st.firstSeenTs <= ttlMs) &&
+      (maxReevals === 0 || (st.reevalCount || 0) < maxReevals)
+    ) pending += 1;
   }
   // soft rejects in last 24h
   const soft = softRejectEvents.filter(ts => now - ts <= dayMs).length;

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { Connection, LogsCallback, PublicKey } from '@solana/web3.js';
 import { AppConfig, Origin } from '../config';
 import { trackFirstN } from '../microstructure/firstNBlocks';
+import { hitCohort } from '../alpha/cohort';
 import { evaluateMint } from '../trader/entryEngine';
 import { logger } from '../utils/logger';
 import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms } from './state';
@@ -138,9 +139,15 @@ export class SolanaLaunchWatcher {
           const evt = this.parseLogs(programIdStr, origin, logs.logs);
           if (!evt) return;
           // microstructure ingest (best-effort, non-blocking)
-          try { trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')); } catch {}
+          try {
+            const tr = trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')) as { buyer?: string } | void;
+            const buyer = (tr as any)?.buyer as string | undefined;
+            if (buyer) {
+              try { hitCohort(evt.mint, buyer, evt.ts); } catch {}
+            }
+          } catch {}
           // Evaluate unitary entry decision (engine enforces its own cooldowns)
-          try { evaluateMint(evt.mint, origin, evt.ts).catch(() => {}); } catch {}
+          try { evaluateMint(evt.mint, origin, evt.ts, evt.creator ?? undefined).catch(() => {}); } catch {}
           this.handleEvent(evt);
         } catch (e) {
           logger.debug('Parse log error:', e);

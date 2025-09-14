@@ -1,9 +1,11 @@
 import type { Origin } from '../config';
 import type { MicroSnapshot } from '../risk/safetyGate';
+import { getCohortBoost } from './cohort';
+import { getGrBoost } from './deployerGr';
 
 export type Conviction = { score: number; buckets: Record<string, number>; reasons: string[] };
 
-export function convictionFromMicro(snapshot: MicroSnapshot, _origin: Origin): Conviction {
+export function convictionFromMicro(snapshot: MicroSnapshot, _origin: Origin, mint?: string, nowTs?: number, creator?: string): Conviction {
   let score = 0;
   const buckets: Record<string, number> = {};
   const reasons: string[] = [];
@@ -14,7 +16,24 @@ export function convictionFromMicro(snapshot: MicroSnapshot, _origin: Origin): C
   if (snapshot.depthEst >= 0.35) { score += 20; buckets.depth = 20; reasons.push('depthEst>=0.35 +20'); }
   if (snapshot.sameFunderRatio > 0.60) { score -= 20; buckets.sameFunder = -20; reasons.push('sameFunderRatio>0.60 -20'); }
 
-  score = Math.max(0, Math.min(100, score));
-  return { score, buckets, reasons };
-}
+  // Cohort boost
+  let cohortBoost = 0;
+  if (mint && typeof nowTs === 'number') {
+    try {
+      cohortBoost = getCohortBoost(mint, nowTs) || 0;
+      if (cohortBoost > 0) reasons.push('cohortHit');
+    } catch {}
+  }
+  // Deployer GR boost
+  let grBoost = 0;
+  if (creator) {
+    try {
+      grBoost = getGrBoost(creator) || 0;
+      if (grBoost > 0) reasons.push(`deployerGR:+${grBoost}`);
+    } catch {}
+  }
 
+  let finalScore = score + cohortBoost + grBoost;
+  finalScore = Math.max(0, Math.min(100, finalScore));
+  return { score: finalScore, buckets, reasons };
+}

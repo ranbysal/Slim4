@@ -46,6 +46,24 @@ const EnvSchema = z.object({
   ALERTS_MIN_SCORE: z.coerce.number().default(0),
   ALERTS_RATE_LIMIT_SEC: z.coerce.number().default(1),
   ALERTS_SUMMARY_EVERY_SEC: z.coerce.number().default(0)
+  ,
+  // Market Heat auto-tuner
+  HEAT_ENABLED: z.coerce.boolean().default(true),
+  HEAT_WINDOW_MIN: z.coerce.number().int().min(1).max(120).default(10),
+  HEAT_MIN_ACCEPTS_PER_HR: z.coerce.number().min(0).default(2),
+  HEAT_MAX_ACCEPTS_PER_HR: z.coerce.number().min(0).default(12),
+  HEAT_LOOSEN_DELTA_SCORE: z.coerce.number().min(0).default(10),
+  HEAT_LOOSEN_DELTA_BUYERS: z.coerce.number().min(0).default(2),
+  HEAT_TIGHTEN_DELTA_SCORE: z.coerce.number().min(0).default(10),
+  HEAT_TIGHTEN_DELTA_BUYERS: z.coerce.number().min(0).default(2),
+  HEAT_FLOOR_SCORE: z.coerce.number().min(0).max(100).default(40),
+  HEAT_FLOOR_BUYERS: z.coerce.number().int().min(0).default(2),
+  HEAT_CEIL_SCORE: z.coerce.number().min(0).max(100).default(95),
+  HEAT_CEIL_BUYERS: z.coerce.number().int().min(0).default(16)
+  ,
+  // Pending TTL controls
+  HOLD_TTL_SEC: z.coerce.number().int().min(0).default(300),
+  HOLD_MAX_REEVALS: z.coerce.number().int().min(0).default(20)
 });
 
 const parsed = EnvSchema.parse(process.env);
@@ -95,6 +113,18 @@ export type AppConfig = Readonly<{
     acceptCooldownSec: number;
     minObsBuyers: number;
     minObsUnique: number;
+    holdTtlSec: number;
+    holdMaxReevals: number;
+  }>;
+  heat: Readonly<{
+    enabled: boolean;
+    windowMin: number;
+    minAcceptsPerHr: number;
+    maxAcceptsPerHr: number;
+    loosenDelta: { score: number; buyers: number };
+    tightenDelta: { score: number; buyers: number };
+    floor: { score: number; buyers: number };
+    ceil: { score: number; buyers: number };
   }>;
 }>;
 
@@ -154,6 +184,18 @@ export const config: AppConfig = Object.freeze({
     reevalCooldownSec: parsed.REEVAL_COOLDOWN_SEC,
     acceptCooldownSec: parsed.ACCEPT_COOLDOWN_SEC,
     minObsBuyers: parsed.MIN_OBS_BUYERS,
-    minObsUnique: parsed.MIN_OBS_UNIQUE
+    minObsUnique: parsed.MIN_OBS_UNIQUE,
+    holdTtlSec: parsed.HOLD_TTL_SEC,
+    holdMaxReevals: parsed.HOLD_MAX_REEVALS
+  },
+  heat: {
+    enabled: parsed.HEAT_ENABLED,
+    windowMin: parsed.HEAT_WINDOW_MIN,
+    minAcceptsPerHr: parsed.HEAT_MIN_ACCEPTS_PER_HR,
+    maxAcceptsPerHr: parsed.HEAT_MAX_ACCEPTS_PER_HR,
+    loosenDelta: { score: parsed.HEAT_LOOSEN_DELTA_SCORE, buyers: parsed.HEAT_LOOSEN_DELTA_BUYERS },
+    tightenDelta: { score: parsed.HEAT_TIGHTEN_DELTA_SCORE, buyers: parsed.HEAT_TIGHTEN_DELTA_BUYERS },
+    floor: { score: parsed.HEAT_FLOOR_SCORE, buyers: parsed.HEAT_FLOOR_BUYERS },
+    ceil: { score: parsed.HEAT_CEIL_SCORE, buyers: parsed.HEAT_CEIL_BUYERS }
   }
 });

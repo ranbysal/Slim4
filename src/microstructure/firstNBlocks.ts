@@ -7,6 +7,7 @@ type Event = {
   ts: number;
   raw: string;
   funder?: string;
+  buyer?: string;
   price?: number;
 };
 
@@ -38,7 +39,12 @@ function extractPrice(raw: string): number | undefined {
   return Number.isFinite(v) ? v : undefined;
 }
 
-export function trackFirstN(mint: string, origin: Origin, logTs: number, rawLog: string): void {
+export function trackFirstN(
+  mint: string,
+  origin: Origin,
+  logTs: number,
+  rawLog: string
+): { buyer?: string } | void {
   if (!mint) return;
   const now = logTs || Date.now();
   let st = states.get(mint);
@@ -67,9 +73,12 @@ export function trackFirstN(mint: string, origin: Origin, logTs: number, rawLog:
   }
   if (price !== undefined) st.lastPrice = price;
 
-  st.events.push({ ts: now, raw: rawLog, funder, price });
+  st.events.push({ ts: now, raw: rawLog, funder, buyer: funder, price });
   // Cap memory per mint to a small window (e.g. last 100 events)
   if (st.events.length > 100) st.events.shift();
+
+  // Expose buyer/pubkey if present
+  if (funder) return { buyer: funder };
 }
 
 export function getSnapshot(mint: string): {

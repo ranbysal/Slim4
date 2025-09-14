@@ -3,9 +3,12 @@ import Database from 'better-sqlite3';
 import { AppConfig } from '../config';
 import { getFeedCounters, getFeedStatus } from '../feeds/state';
 import { getSummary as getMicroSummary, resetExpired as resetMicroExpired } from '../microstructure/firstNBlocks';
+import { getCohortStatus } from '../alpha/cohort';
+import { getDeployerGrStatus } from '../alpha/deployerGr';
 import { logger } from '../utils/logger';
 import { getLastAlertTs } from '../utils/telegram';
 import { getDecisionStats } from '../trader/entryEngine';
+import { getHeatStatus } from '../market/heat';
 
 export function createStatusRouter(db: Database.Database, config: AppConfig) {
   const router = Router();
@@ -95,6 +98,11 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
       } catch {}
     } catch {}
 
+    const heat = getHeatStatus(Date.now());
+
+    const cohort = getCohortStatus();
+    const grStatus = getDeployerGrStatus();
+
     res.json({
       schemaVersion,
       openPositions,
@@ -118,6 +126,9 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
         last10,
         last10Accepted
       },
+      heat,
+      cohort,
+      deployerGr: { rowsLoaded: grStatus.rowsLoaded },
       microstructure: {
         trackedMints: micro.trackedMints,
         recentSnapshots: micro.recentSnapshots
