@@ -36,7 +36,7 @@ export class SolanaLaunchWatcher {
   private lastStableSince = Date.now();
   private onReconnectLoopAlerted = false;
   private stopped = false;
-  private lastDecisionTs: Map<string, number> = new Map();
+  // Entry engine now self-enforces re-evaluation cooldowns
 
   constructor(db: Database.Database, config: AppConfig) {
     this.db = db;
@@ -139,15 +139,8 @@ export class SolanaLaunchWatcher {
           if (!evt) return;
           // microstructure ingest (best-effort, non-blocking)
           try { trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')); } catch {}
-          // Evaluate unitary entry decision with cooldown debounce
-          try {
-            const last = this.lastDecisionTs.get(evt.mint) || 0;
-            const cooldownMs = (this.config.entry?.cooldownSec || 60) * 1000;
-            if (evt.ts - last >= cooldownMs) {
-              this.lastDecisionTs.set(evt.mint, evt.ts);
-              evaluateMint(evt.mint, origin, evt.ts).catch(() => {});
-            }
-          } catch {}
+          // Evaluate unitary entry decision (engine enforces its own cooldowns)
+          try { evaluateMint(evt.mint, origin, evt.ts).catch(() => {}); } catch {}
           this.handleEvent(evt);
         } catch (e) {
           logger.debug('Parse log error:', e);

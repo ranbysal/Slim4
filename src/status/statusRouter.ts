@@ -5,6 +5,7 @@ import { getFeedCounters, getFeedStatus } from '../feeds/state';
 import { getSummary as getMicroSummary, resetExpired as resetMicroExpired } from '../microstructure/firstNBlocks';
 import { logger } from '../utils/logger';
 import { getLastAlertTs } from '../utils/telegram';
+import { getDecisionStats } from '../trader/entryEngine';
 
 export function createStatusRouter(db: Database.Database, config: AppConfig) {
   const router = Router();
@@ -62,7 +63,10 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
     // Decision stats (dry-run entry engine)
     let dryRunAccepted24h = 0;
     let rejected24h = 0;
+    let softRejected24h = 0;
+    let pending24h = 0;
     let last10: Array<{ mint: string | null; origin: string | null; status: string; size_tier: string | null; decided_ts: number | null }> = [];
+    let last10Accepted: Array<{ mint: string | null; origin: string | null; tier: string | null; decided_ts: number | null }> = [];
     try {
       const now = Date.now();
       const since = now - 24 * 60 * 60 * 1000;
@@ -79,6 +83,16 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
           "SELECT mint, origin, status, size_tier, decided_ts FROM orders WHERE status IN ('dry_run','rejected') ORDER BY decided_ts DESC LIMIT 10"
         ).all() as any[];
       } catch (e) { logger.debug('last10Decisions query failed'); }
+      try {
+        last10Accepted = db.prepare(
+          "SELECT mint, origin, size_tier as tier, decided_ts FROM orders WHERE status='dry_run' ORDER BY decided_ts DESC LIMIT 10"
+        ).all() as any[];
+      } catch (e) { logger.debug('last10Accepted query failed'); }
+      try {
+        const ds = getDecisionStats();
+        pending24h = ds.pending24h;
+        softRejected24h = ds.softRejected24h;
+      } catch {}
     } catch {}
 
     res.json({
@@ -99,7 +113,10 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
         dryRun: config.dryRun,
         dryRunAccepted24h,
         rejected24h,
-        last10
+        pending24h,
+        softRejected24h,
+        last10,
+        last10Accepted
       },
       microstructure: {
         trackedMints: micro.trackedMints,

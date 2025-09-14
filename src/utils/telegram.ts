@@ -12,13 +12,16 @@ let summaryTimerStarted = false;
 let summaryIntervalMs = 0;
 let summaryAccepted = 0;
 let summaryRejected = 0;
+let summaryPending = 0;
+let summarySoftRejected = 0;
+let summaryFatalRejected = 0;
 const reasonCounts: Map<string, number> = new Map();
 const originCounts: Map<Origin, number> = new Map();
 
 type Decision = {
   mint: string;
   origin: Origin;
-  status: 'rejected' | 'dry_run' | 'pending';
+  status: 'rejected' | 'rejected_fatal' | 'rejected_soft' | 'dry_run' | 'pending' | 'hold';
   score: number;
   tier: 'APEX' | 'SMALL' | 'REJECT';
   reasons?: string[];
@@ -61,13 +64,16 @@ function ensureSummaryTimer(config: AppConfig) {
         .map(([r]) => r);
       const byOrigin: Record<string, number> = {};
       for (const [k, v] of originCounts.entries()) byOrigin[k] = v;
-      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}`;
+      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected}`;
       // best-effort send respecting rate-limit
       sendTelegram(cfgRef, msg).catch(() => {});
     } catch {}
     // reset counters after each summary
     summaryAccepted = 0;
     summaryRejected = 0;
+    summaryPending = 0;
+    summarySoftRejected = 0;
+    summaryFatalRejected = 0;
     reasonCounts.clear();
     originCounts.clear();
   }, summaryIntervalMs);
@@ -96,7 +102,15 @@ export function getLastAlertTs(): number { return lastAlertTs; }
 export function bumpSummary(decision: Decision) {
   try {
     originCounts.set(decision.origin, (originCounts.get(decision.origin) || 0) + 1);
-    if (decision.status === 'rejected') summaryRejected += 1; else summaryAccepted += 1;
+    if (decision.status === 'rejected' || decision.status === 'rejected_fatal' || decision.status === 'rejected_soft') {
+      summaryRejected += 1;
+      if (decision.status === 'rejected_fatal') summaryFatalRejected += 1;
+      if (decision.status === 'rejected_soft') summarySoftRejected += 1;
+    } else if (decision.status === 'hold') {
+      summaryPending += 1;
+    } else {
+      summaryAccepted += 1;
+    }
     const reasons = decision.reasons || [];
     for (const r of reasons) reasonCounts.set(r, (reasonCounts.get(r) || 0) + 1);
   } catch {}
@@ -113,9 +127,11 @@ export async function sendDecisionAlert(config: AppConfig, decision: Decision, s
     ensureSummaryTimer(config);
     // gating
     if (config.alerts.acceptedOnly && decision.status !== 'dry_run') return;
-    if (decision.score < (config.alerts.minScore || 0)) return;
+    // Apply minimum score gating only to accepts
+    if (decision.status === 'dry_run' && decision.score < (config.alerts.minScore || 0)) return;
 
-    const mark = decision.status === 'rejected' ? '❌' : '✅';
+    const isReject = decision.status === 'rejected' || decision.status === 'rejected_fatal' || decision.status === 'rejected_soft';
+    const mark = isReject ? '❌' : '✅';
     const line = `DECISION ${mark} ${mintShort(decision.mint)} ${decision.origin} score ${decision.score} tier ${decision.tier} | buyers ${snapshot.buyers} funders ${snapshot.uniqueFunders} same ${snapshot.sameFunderRatio.toFixed(2)} jumps ${snapshot.priceJumps}`;
     await sendTelegram(config, line);
   } catch (e) {

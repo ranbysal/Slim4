@@ -35,6 +35,11 @@ const EnvSchema = z.object({
   ENTRY_MIN_SCORE: z.coerce.number().default(60),
   ENTRY_APEX_SCORE: z.coerce.number().default(80),
   DECISION_COOLDOWN_SEC: z.coerce.number().default(120),
+  // New adaptive/deferred entry controls
+  MIN_OBS_BUYERS: z.coerce.number().default(8),
+  MIN_OBS_UNIQUE: z.coerce.number().default(6),
+  REEVAL_COOLDOWN_SEC: z.coerce.number().default(15),
+  ACCEPT_COOLDOWN_SEC: z.coerce.number().default(120),
 
   // Alerts / Telegram noise control
   ALERTS_ACCEPTED_ONLY: z.coerce.boolean().default(false),
@@ -82,7 +87,15 @@ export type AppConfig = Readonly<{
   }>;
   dryRun: boolean;
   sizes: Readonly<{ smallUsd: number; apexUsd: number }>;
-  entry: Readonly<{ minScore: number; apexScore: number; cooldownSec: number }>;
+  entry: Readonly<{
+    minScore: number;
+    apexScore: number;
+    cooldownSec: number;
+    reevalCooldownSec: number;
+    acceptCooldownSec: number;
+    minObsBuyers: number;
+    minObsUnique: number;
+  }>;
 }>;
 
 function parseCsvPrograms(raw: string): string[] {
@@ -134,5 +147,13 @@ export const config: AppConfig = Object.freeze({
   },
   dryRun: parsed.DRY_RUN,
   sizes: { smallUsd: parsed.SIZE_SMALL_USD, apexUsd: parsed.SIZE_APEX_USD },
-  entry: { minScore: parsed.ENTRY_MIN_SCORE, apexScore: parsed.ENTRY_APEX_SCORE, cooldownSec: parsed.DECISION_COOLDOWN_SEC }
+  entry: {
+    minScore: parsed.ENTRY_MIN_SCORE,
+    apexScore: parsed.ENTRY_APEX_SCORE,
+    cooldownSec: parsed.DECISION_COOLDOWN_SEC,
+    reevalCooldownSec: parsed.REEVAL_COOLDOWN_SEC,
+    acceptCooldownSec: parsed.ACCEPT_COOLDOWN_SEC,
+    minObsBuyers: parsed.MIN_OBS_BUYERS,
+    minObsUnique: parsed.MIN_OBS_UNIQUE
+  }
 });
