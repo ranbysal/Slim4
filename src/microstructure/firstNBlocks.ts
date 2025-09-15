@@ -1,4 +1,32 @@
 import type { Origin } from '../config';
+import { config } from '../config';
+import { incDropInvalidMint } from '../feeds/state';
+
+// Strict helpers for mint/buyer validation
+const DENYLIST_IDS = new Set<string>([
+  'ComputeBudget111111111111111111111111111111',
+  '11111111111111111111111111111111',
+  'Stake11111111111111111111111111111111111111',
+  'Vote111111111111111111111111111111111111111',
+  'Sysvar1111111111111111111111111111111111111',
+  'Config1111111111111111111111111111111111111'
+]);
+
+function isBase58Len32to44(s: string): boolean {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
+}
+
+function isValidMint(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  if (!isBase58Len32to44(addr)) return false;
+  if (DENYLIST_IDS.has(addr)) return false;
+  if (isSubscribedProgram(addr)) return false;
+  return true;
+}
+
+function isLikelyBuyer(addr: string | undefined | null): boolean {
+  return isValidMint(addr || '');
+}
 
 // In-memory microstructure tracker for the first N blocks/minutes after a mint appears.
 // Lightweight, best-effort parsing from raw logs. This is a stub for future sophistication.
@@ -27,8 +55,20 @@ function extractFunder(raw: string, mint: string): string | undefined {
   // Very loose base58-ish match; pick a candidate that isn't the mint.
   const b58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
   const cands = Array.from(raw.matchAll(b58)).map(m => m[0]);
-  const cand = cands.find(c => c !== mint);
+  const cand = cands.find(c => c !== mint && isLikelyBuyer(c));
   return cand;
+}
+
+// Helper derived from union of configured program IDs; treat these as invalid mints/buyers
+const SUB_PROGRAM_IDS = new Set<string>([
+  ...config.programs.pumpfun,
+  ...config.programs.letsbonk,
+  ...config.programs.moonshot,
+  ...config.programs.raydium,
+  ...config.programs.orca
+].map(s => (s || '').trim()).filter(Boolean));
+function isSubscribedProgram(addr: string): boolean {
+  try { return SUB_PROGRAM_IDS.has(addr); } catch { return false; }
 }
 
 function extractPrice(raw: string): number | undefined {
@@ -46,6 +86,11 @@ export function trackFirstN(
   rawLog: string
 ): { buyer?: string } | void {
   if (!mint) return;
+  if (!isValidMint(mint)) {
+    // Count drops for program-id-as-mint scenarios
+    try { if (isSubscribedProgram(mint)) incDropInvalidMint(); } catch {}
+    return;
+  }
   const now = logTs || Date.now();
   let st = states.get(mint);
   if (!st) {

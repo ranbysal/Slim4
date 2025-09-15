@@ -18,6 +18,9 @@ let summarySoftRejected = 0;
 let summaryFatalRejected = 0;
 const reasonCounts: Map<string, number> = new Map();
 const originCounts: Map<Origin, number> = new Map();
+// Accept dedupe state
+const lastAcceptTsByMint: Map<string, number> = new Map();
+const repeatedAccepts: Map<string, number> = new Map();
 
 type Decision = {
   mint: string;
@@ -67,7 +70,12 @@ function ensureSummaryTimer(config: AppConfig) {
       for (const [k, v] of originCounts.entries()) byOrigin[k] = v;
       const heat = getHeatStatus(Date.now());
       const eff = heat.effective;
-      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected} | heat: ${heat.band} a/h:${heat.acceptsPerHr} eff:${eff.minScore}/${eff.apexScore}/${eff.minBuyers}/${eff.minUnique}`;
+      const topRepeatsStr = Array.from(repeatedAccepts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([m, c]) => `${mintShort(m)}:${c}`)
+        .join(',');
+      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected} repeatedAccepts:{${topRepeatsStr}} | heat: ${heat.band} a/h:${heat.acceptsPerHr} distinctHr:${heat.acceptedDistinctInLastHour} eff:${eff.minScore}/${eff.apexScore}/${eff.minBuyers}/${eff.minUnique}`;
       // best-effort send respecting rate-limit
       sendTelegram(cfgRef, msg).catch(() => {});
     } catch {}
@@ -79,6 +87,7 @@ function ensureSummaryTimer(config: AppConfig) {
     summaryFatalRejected = 0;
     reasonCounts.clear();
     originCounts.clear();
+    repeatedAccepts.clear();
   }, summaryIntervalMs);
 }
 
@@ -135,6 +144,23 @@ export async function sendDecisionAlert(config: AppConfig, decision: Decision, s
 
     const isReject = decision.status === 'rejected' || decision.status === 'rejected_fatal' || decision.status === 'rejected_soft';
     const mark = isReject ? '❌' : '✅';
+    // Accept dedupe: if ✅ for same mint within last 5 minutes, suppress individual alert and aggregate
+    if (!isReject && decision.status === 'dry_run') {
+      const now = Date.now();
+      const last = lastAcceptTsByMint.get(decision.mint) || 0;
+      const within5m = now - last <= 5 * 60 * 1000;
+      // Prune old entries occasionally
+      if (lastAcceptTsByMint.size > 10000) {
+        const cutoff = now - 60 * 60 * 1000;
+        for (const [m, ts] of lastAcceptTsByMint.entries()) { if (ts < cutoff) lastAcceptTsByMint.delete(m); }
+      }
+      if (within5m) {
+        repeatedAccepts.set(decision.mint, (repeatedAccepts.get(decision.mint) || 0) + 1);
+        lastAcceptTsByMint.set(decision.mint, now);
+        return; // suppress alert
+      }
+      lastAcceptTsByMint.set(decision.mint, now);
+    }
     const line = `DECISION ${mark} ${mintShort(decision.mint)} ${decision.origin} score ${decision.score} tier ${decision.tier} | buyers ${snapshot.buyers} funders ${snapshot.uniqueFunders} same ${snapshot.sameFunderRatio.toFixed(2)} jumps ${snapshot.priceJumps}`;
     await sendTelegram(config, line);
   } catch (e) {

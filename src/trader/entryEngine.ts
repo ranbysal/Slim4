@@ -31,6 +31,10 @@ function ensureOrdersDecisionColumns(d: Database.Database) {
     if (!names.has('decided_ts')) addCol("ALTER TABLE orders ADD COLUMN decided_ts INTEGER");
     if (!names.has('size_tier')) addCol("ALTER TABLE orders ADD COLUMN size_tier TEXT");
     if (!names.has('notes')) addCol("ALTER TABLE orders ADD COLUMN notes TEXT");
+    // Ensure unique constraint for single unitary-entry row per market
+    try {
+      d.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_unique_unitary_entry ON orders(market, type) WHERE type='unitary-entry'");
+    } catch {}
   } catch (e) {
     logger.warn('ensureOrdersDecisionColumns error:', (e as Error)?.message ?? e);
   }
@@ -110,7 +114,7 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
       fatalRejectEvents.push(nowTs);
       try {
         const insert = d.prepare(
-          `INSERT INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
+          `INSERT OR IGNORE INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
            VALUES (@market, @side, @type, @status, @quantity_base, @price, NULL, @mint, @origin, @decided_ts, @size_tier, @notes)`
         );
         insert.run({
@@ -171,9 +175,20 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
     const status: 'dry_run' | 'pending' = config.dryRun ? 'dry_run' : 'pending';
     const sizeTier = decidedTier;
 
+    // Single-accept guard: if already accepted for this mint, avoid duplicate rows unless upgrading SMALL→APEX
+    if (st.lastDecision === 'accepted_small' || st.lastDecision === 'accepted_apex') {
+      const prevTier = st.lastDecision === 'accepted_apex' ? 'APEX' : 'SMALL';
+      const isUpgrade = prevTier === 'SMALL' && decidedTier === 'APEX';
+      if (!isUpgrade) {
+        // already accepted at this or higher tier; keep in-memory updates only
+        try { bumpSummary({ mint, origin, status: 'hold', score: st.bestScore, tier: prevTier as any }); } catch {}
+        return;
+      }
+    }
+
     try {
       const insert = d.prepare(
-        `INSERT INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
+        `INSERT OR IGNORE INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
          VALUES (@market, @side, @type, @status, @quantity_base, @price, NULL, @mint, @origin, @decided_ts, @size_tier, @notes)`
       );
       insert.run({
@@ -200,7 +215,7 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
       await sendDecisionAlert(config, decision as any, snapshot);
     } catch {}
     try {
-      if (status === 'dry_run') recordHeatAccept(nowTs);
+      if (status === 'dry_run' && !(st.lastDecision === 'accepted_small' || st.lastDecision === 'accepted_apex')) recordHeatAccept(mint, nowTs);
     } catch {}
   } catch (e) {
     logger.warn('evaluateMint error:', (e as Error)?.message ?? e);

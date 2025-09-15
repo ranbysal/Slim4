@@ -36,8 +36,8 @@ const EnvSchema = z.object({
   ENTRY_APEX_SCORE: z.coerce.number().default(80),
   DECISION_COOLDOWN_SEC: z.coerce.number().default(120),
   // New adaptive/deferred entry controls
-  MIN_OBS_BUYERS: z.coerce.number().default(8),
-  MIN_OBS_UNIQUE: z.coerce.number().default(6),
+  MIN_OBS_BUYERS: z.coerce.number().default(4),
+  MIN_OBS_UNIQUE: z.coerce.number().default(3),
   REEVAL_COOLDOWN_SEC: z.coerce.number().default(15),
   ACCEPT_COOLDOWN_SEC: z.coerce.number().default(120),
 

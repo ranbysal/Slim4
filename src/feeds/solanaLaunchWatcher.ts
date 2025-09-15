@@ -1,12 +1,13 @@
 import Database from 'better-sqlite3';
 import { Connection, LogsCallback, PublicKey } from '@solana/web3.js';
-import { AppConfig, Origin } from '../config';
+import { AppConfig, Origin, config } from '../config';
 import { trackFirstN } from '../microstructure/firstNBlocks';
 import { hitCohort } from '../alpha/cohort';
 import { evaluateMint } from '../trader/entryEngine';
 import { logger } from '../utils/logger';
-import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms } from './state';
+import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms, incDropInvalidMint, incDropDuplicateInBatch, incDropNotMint } from './state';
 import { sendTelegram } from '../utils/telegram';
+import { isRealSplMint } from './mintVerifier';
 
 type EndpointSet = 'primary' | 'backup';
 
@@ -14,6 +15,7 @@ type ParsedTokenEvent = {
   ts: number;
   programId: string;
   mint: string;
+  candidates: string[];
   name?: string;
   symbol?: string;
   creator?: string;
@@ -24,6 +26,32 @@ function redact(pk: string) {
   if (!pk) return '';
   if (pk.length <= 10) return pk;
   return `${pk.slice(0, 4)}…${pk.slice(-4)}`;
+}
+
+// Strict helpers for mint/buyer validation
+const DENYLIST_IDS = new Set<string>([
+  'ComputeBudget111111111111111111111111111111',
+  '11111111111111111111111111111111',
+  'Stake11111111111111111111111111111111111111',
+  'Vote111111111111111111111111111111111111111',
+  'Sysvar1111111111111111111111111111111111111',
+  'Config1111111111111111111111111111111111111'
+]);
+
+function isBase58Len32to44(s: string): boolean {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
+}
+
+function isValidMint(addr: string | undefined | null): boolean {
+  if (!addr) return false;
+  if (!isBase58Len32to44(addr)) return false;
+  if (DENYLIST_IDS.has(addr)) return false;
+  if (isSubscribedProgram(addr)) return false;
+  return true;
+}
+
+function isLikelyBuyer(addr: string | undefined | null): boolean {
+  return isValidMint(addr || '');
 }
 
 export class SolanaLaunchWatcher {
@@ -37,6 +65,7 @@ export class SolanaLaunchWatcher {
   private lastStableSince = Date.now();
   private onReconnectLoopAlerted = false;
   private stopped = false;
+  private seenMintsBySignature: Map<string, { mints: Set<string>; ts: number }> = new Map();
   // Entry engine now self-enforces re-evaluation cooldowns
 
   constructor(db: Database.Database, config: AppConfig) {
@@ -138,11 +167,42 @@ export class SolanaLaunchWatcher {
         try {
           const evt = this.parseLogs(programIdStr, origin, logs.logs);
           if (!evt) return;
+          // De-dupe the same mint within the same log batch (by signature)
+          const sig = (logs as any)?.signature as string | undefined;
+          if (sig) {
+            const now = Date.now();
+            // prune old signatures (> 60s)
+            for (const [k, v] of this.seenMintsBySignature.entries()) {
+              if (now - v.ts > 60_000) this.seenMintsBySignature.delete(k);
+            }
+            let rec = this.seenMintsBySignature.get(sig);
+            if (!rec) {
+              rec = { mints: new Set<string>(), ts: now };
+              this.seenMintsBySignature.set(sig, rec);
+            }
+            rec.ts = now;
+            if (rec.mints.has(evt.mint)) {
+              incDropDuplicateInBatch();
+              return; // drop duplicate in this batch
+            }
+            rec.mints.add(evt.mint);
+          }
+          // Verify top candidate is an SPL Mint; never fall back to program id.
+          try {
+            const ok = await isRealSplMint(this.conn!, evt.mint);
+            if (!ok) {
+              incDropNotMint();
+              return;
+            }
+          } catch {
+            incDropNotMint();
+            return;
+          }
           // microstructure ingest (best-effort, non-blocking)
           try {
             const tr = trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')) as { buyer?: string } | void;
             const buyer = (tr as any)?.buyer as string | undefined;
-            if (buyer) {
+            if (buyer && isLikelyBuyer(buyer)) {
               try { hitCohort(evt.mint, buyer, evt.ts); } catch {}
             }
           } catch {}
@@ -166,10 +226,14 @@ export class SolanaLaunchWatcher {
     const ts = Date.now();
     const text = logs.join('\n');
     const b58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
-    const candidates = Array.from(text.matchAll(b58)).map(m => m[0]);
+    const candidates = Array.from(text.matchAll(b58)).map(m => m[0]).filter((v, i, a) => a.indexOf(v) === i);
     // Try to pick a plausible mint-like key (first candidate).
     const mint = candidates[0];
     if (!mint) return null;
+    if (!isValidMint(mint)) {
+      incDropInvalidMint();
+      return null;
+    }
     const nameMatch = text.match(/name[:=]\s*([A-Za-z0-9_\-\.]{1,32})/i);
     const symbolMatch = text.match(/symbol[:=]\s*([A-Za-z0-9_\-]{1,16})/i);
     const creatorMatch = text.match(/creator[:=]\s*([1-9A-HJ-NP-Za-km-z]{32,44})/i);
@@ -177,6 +241,7 @@ export class SolanaLaunchWatcher {
       ts,
       programId,
       mint,
+      candidates,
       name: nameMatch?.[1],
       symbol: symbolMatch?.[1],
       creator: creatorMatch?.[1] || candidates.find(c => c !== mint),
@@ -262,4 +327,17 @@ export class SolanaLaunchWatcher {
     } catch {}
     await this.connectAndSubscribe(which);
   }
+
+}
+
+// Module-level helper so validators above can reference it
+const SUB_PROGRAM_IDS = new Set<string>([
+  ...config.programs.pumpfun,
+  ...config.programs.letsbonk,
+  ...config.programs.moonshot,
+  ...config.programs.raydium,
+  ...config.programs.orca
+].map(s => (s || '').trim()).filter(Boolean));
+function isSubscribedProgram(addr: string): boolean {
+  try { return SUB_PROGRAM_IDS.has(addr); } catch { return false; }
 }

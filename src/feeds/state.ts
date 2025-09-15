@@ -2,6 +2,11 @@ import type { Origin } from '../config';
 
 let tokensSeen24h = 0;
 let tokensInserted24h = 0;
+const dropCounters = {
+  invalidMint: 0,
+  duplicateInBatch: 0,
+  notMint: 0
+};
 let lastReset = Date.now();
 
 let subscribedPrograms = 0;
@@ -58,6 +63,19 @@ export function getFeedStatus() {
     byOrigin: { ...byOrigin },
     lastEventTs,
     tokensSeen24h,
-    tokensInserted24h
+    tokensInserted24h,
+    dropCounters: { ...dropCounters }
   };
+}
+
+export function incDropInvalidMint() {
+  dropCounters.invalidMint += 1;
+}
+
+export function incDropDuplicateInBatch() {
+  dropCounters.duplicateInBatch += 1;
+}
+
+export function incDropNotMint() {
+  dropCounters.notMint += 1;
 }

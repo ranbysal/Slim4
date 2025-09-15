@@ -68,6 +68,9 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
     let rejected24h = 0;
     let softRejected24h = 0;
     let pending24h = 0;
+    let eligibleByObs24h = 0;
+    let eligibleByScore24h = 0;
+    let distinctAccepted24h = 0;
     let last10: Array<{ mint: string | null; origin: string | null; status: string; size_tier: string | null; decided_ts: number | null }> = [];
     let last10Accepted: Array<{ mint: string | null; origin: string | null; tier: string | null; decided_ts: number | null }> = [];
     try {
@@ -77,6 +80,12 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
         const rowA = db.prepare("SELECT COUNT(1) as c FROM orders WHERE status='dry_run' AND decided_ts >= ?").get(since) as { c: number };
         dryRunAccepted24h = rowA?.c ?? 0;
       } catch (e) { logger.debug('dryRunAccepted24h query failed'); }
+      try {
+        const rowD = db
+          .prepare("SELECT COUNT(DISTINCT market) as c FROM orders WHERE status='dry_run' AND decided_ts >= ?")
+          .get(since) as { c: number };
+        distinctAccepted24h = rowD?.c ?? 0;
+      } catch (e) { logger.debug('distinctAccepted24h query failed'); }
       try {
         const rowR = db.prepare("SELECT COUNT(1) as c FROM orders WHERE status='rejected' AND decided_ts >= ?").get(since) as { c: number };
         rejected24h = rowR?.c ?? 0;
@@ -91,6 +100,28 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
           "SELECT mint, origin, size_tier as tier, decided_ts FROM orders WHERE status='dry_run' ORDER BY decided_ts DESC LIMIT 10"
         ).all() as any[];
       } catch (e) { logger.debug('last10Accepted query failed'); }
+      // Compute eligibility counters from recent orders' notes
+      try {
+        const rows = db.prepare("SELECT decided_ts, status, notes FROM orders WHERE decided_ts >= ?").all(since) as Array<{ decided_ts: number; status: string; notes: string | null }>;
+        for (const r of rows) {
+          if (!r?.notes) continue;
+          try {
+            const n = JSON.parse(r.notes);
+            const snapshot = n?.snapshot as { buyers?: number; uniqueFunders?: number } | undefined;
+            if (snapshot && typeof snapshot.buyers === 'number' && typeof snapshot.uniqueFunders === 'number') {
+              if (snapshot.buyers >= config.entry.minObsBuyers && snapshot.uniqueFunders >= config.entry.minObsUnique) {
+                eligibleByObs24h += 1;
+              }
+            }
+            const conviction = n?.conviction as { score?: number } | undefined;
+            if (conviction && typeof conviction.score === 'number') {
+              if (conviction.score >= config.entry.minScore) {
+                eligibleByScore24h += 1;
+              }
+            }
+          } catch {}
+        }
+      } catch (e) { logger.debug('eligible counters query failed'); }
       try {
         const ds = getDecisionStats();
         pending24h = ds.pending24h;
@@ -115,14 +146,18 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
       feeds: {
         subscribedPrograms: feedStatus.subscribedPrograms,
         byOrigin: feedStatus.byOrigin,
-        lastEventTs: feedStatus.lastEventTs
+        lastEventTs: feedStatus.lastEventTs,
+        dropCounters: feedStatus.dropCounters
       },
       decisions: {
         dryRun: config.dryRun,
         dryRunAccepted24h,
+        distinctAccepted24h,
         rejected24h,
         pending24h,
         softRejected24h,
+        eligibleByObs24h,
+        eligibleByScore24h,
         last10,
         last10Accepted
       },

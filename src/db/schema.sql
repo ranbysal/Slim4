@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_position ON orders(position_id);
 
+-- Ensure single unitary-entry row per market
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_unique_unitary_entry
+  ON orders(market, type)
+  WHERE type = 'unitary-entry';
+
 -- Trades executed, linked to positions and optionally orders
 CREATE TABLE IF NOT EXISTS trades (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,4 +84,3 @@ CREATE TABLE IF NOT EXISTS jito_tips_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jito_tips_day ON jito_tips_ledger(budget_day);
-
