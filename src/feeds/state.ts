@@ -5,7 +5,11 @@ let tokensInserted24h = 0;
 const dropCounters = {
   invalidMint: 0,
   duplicateInBatch: 0,
-  notMint: 0
+  notMint: 0,
+  // tx introspection metrics
+  txNoMint: 0,
+  txCacheHit: 0,
+  txFetchErr: 0
 };
 let lastReset = Date.now();
 
@@ -78,4 +82,17 @@ export function incDropDuplicateInBatch() {
 
 export function incDropNotMint() {
   dropCounters.notMint += 1;
+}
+
+// New counters for tx introspection
+export function incDropTxNoMint() {
+  dropCounters.txNoMint += 1;
+}
+
+export function incTxCacheHit() {
+  dropCounters.txCacheHit += 1;
+}
+
+export function incTxFetchErr() {
+  dropCounters.txFetchErr += 1;
 }

@@ -28,6 +28,15 @@ const EnvSchema = z.object({
   RAYDIUM_PROGRAM_IDS: z.string().default(""),
   ORCA_PROGRAM_IDS: z.string().default("")
   ,
+  // Tx introspection
+  TX_LOOKUP_MODE: z.enum(["pumpfun_only", "off", "all"]).default("pumpfun_only"),
+  TX_LOOKUP_QPS: z.coerce.number().min(0).max(20).default(2),
+  TX_LOOKUP_MAX_PER_MIN: z.coerce.number().min(0).max(600).default(60)
+  ,
+  // Mint verification cost guardrails
+  MINT_VERIFY_MODE: z.enum(["off", "deferred", "eager"]).default("deferred"),
+  MINT_VERIFY_TTL_SEC: z.coerce.number().int().min(60).max(24 * 60 * 60).default(3600)
+  ,
   // Unitary Entry Engine / Dry run
   DRY_RUN: z.coerce.boolean().default(true),
   SIZE_SMALL_USD: z.coerce.number().default(30),
@@ -103,6 +112,15 @@ export type AppConfig = Readonly<{
     raydium: string[];
     orca: string[];
   }>;
+  txLookup: Readonly<{
+    mode: 'pumpfun_only' | 'off' | 'all';
+    qps: number;
+    maxPerMin: number;
+  }>;
+  mintVerify: Readonly<{
+    mode: 'off' | 'deferred' | 'eager';
+    ttlSec: number;
+  }>;
   dryRun: boolean;
   sizes: Readonly<{ smallUsd: number; apexUsd: number }>;
   entry: Readonly<{
@@ -174,6 +192,15 @@ export const config: AppConfig = Object.freeze({
     moonshot: parseCsvPrograms(parsed.MOONSHOT_PROGRAM_IDS),
     raydium: parseCsvPrograms(parsed.RAYDIUM_PROGRAM_IDS),
     orca: parseCsvPrograms(parsed.ORCA_PROGRAM_IDS)
+  },
+  txLookup: {
+    mode: parsed.TX_LOOKUP_MODE,
+    qps: parsed.TX_LOOKUP_QPS,
+    maxPerMin: parsed.TX_LOOKUP_MAX_PER_MIN
+  },
+  mintVerify: {
+    mode: parsed.MINT_VERIFY_MODE,
+    ttlSec: parsed.MINT_VERIFY_TTL_SEC
   },
   dryRun: parsed.DRY_RUN,
   sizes: { smallUsd: parsed.SIZE_SMALL_USD, apexUsd: parsed.SIZE_APEX_USD },

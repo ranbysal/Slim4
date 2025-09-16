@@ -11,6 +11,8 @@ let lastAlertTs = 0;
 // Summary state
 let summaryTimerStarted = false;
 let summaryIntervalMs = 0;
+let lastSummaryTs = 0; // epoch ms of last tick
+let nextSummaryTs = 0; // epoch ms of next tick
 let summaryAccepted = 0;
 let summaryRejected = 0;
 let summaryPending = 0;
@@ -52,7 +54,7 @@ function getBot(config: AppConfig): TelegramBot | null {
   }
 }
 
-function ensureSummaryTimer(config: AppConfig) {
+export function ensureSummaryTimer(config: AppConfig) {
   if (summaryTimerStarted) return;
   const everySec = config.alerts.summaryEverySec || 0;
   if (everySec <= 0) return;
@@ -61,6 +63,10 @@ function ensureSummaryTimer(config: AppConfig) {
   const cfgRef = config; // capture for timer
   setInterval(() => {
     try {
+      const now = Date.now();
+      lastSummaryTs = now;
+      nextSummaryTs = now + summaryIntervalMs;
+      logger.debug('[alerts] summary tick');
       // Compose summary
       const topReasons = Array.from(reasonCounts.entries())
         .sort((a, b) => b[1] - a[1])
@@ -75,7 +81,8 @@ function ensureSummaryTimer(config: AppConfig) {
         .slice(0, 3)
         .map(([m, c]) => `${mintShort(m)}:${c}`)
         .join(',');
-      const msg = `SUMMARY last 5m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected} repeatedAccepts:{${topRepeatsStr}} | heat: ${heat.band} a/h:${heat.acceptsPerHr} distinctHr:${heat.acceptedDistinctInLastHour} eff:${eff.minScore}/${eff.apexScore}/${eff.minBuyers}/${eff.minUnique}`;
+      const mins = Math.max(1, Math.round(cfgRef.alerts.summaryEverySec / 60));
+      const msg = `SUMMARY last ${mins}m — accepts:${summaryAccepted} rejects:${summaryRejected} topReasons:[${topReasons.join(',')}] byOrigin:{pumpfun:${byOrigin.pumpfun||0},raydium:${byOrigin.raydium||0},moonshot:${byOrigin.moonshot||0}}\n pending:${summaryPending} softRejects:${summarySoftRejected} fatalRejects:${summaryFatalRejected} repeatedAccepts:{${topRepeatsStr}} | heat: ${heat.band} a/h:${heat.acceptsPerHr} distinctHr:${heat.acceptedDistinctInLastHour} eff:${eff.minScore}/${eff.apexScore}/${eff.minBuyers}/${eff.minUnique}`;
       // best-effort send respecting rate-limit
       sendTelegram(cfgRef, msg).catch(() => {});
     } catch {}
@@ -167,3 +174,6 @@ export async function sendDecisionAlert(config: AppConfig, decision: Decision, s
     logger.warn('sendDecisionAlert error:', (e as Error)?.message ?? e);
   }
 }
+
+export function getNextSummaryTs(): number { return nextSummaryTs; }
+export function getLastSummaryTs(): number { return lastSummaryTs; }

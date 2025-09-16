@@ -6,7 +6,7 @@ import { getSummary as getMicroSummary, resetExpired as resetMicroExpired } from
 import { getCohortStatus } from '../alpha/cohort';
 import { getDeployerGrStatus } from '../alpha/deployerGr';
 import { logger } from '../utils/logger';
-import { getLastAlertTs } from '../utils/telegram';
+import { getLastAlertTs, getLastSummaryTs, getNextSummaryTs } from '../utils/telegram';
 import { getDecisionStats } from '../trader/entryEngine';
 import { getHeatStatus } from '../market/heat';
 
@@ -140,6 +140,13 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
       todayRealizedPnlSol,
       activeHalts,
       jito: config.jito,
+      cost: {
+        txLookupMode: config.txLookup.mode,
+        txQps: config.txLookup.qps,
+        txMaxPerMin: config.txLookup.maxPerMin,
+        mintVerifyMode: config.mintVerify.mode,
+        mintVerifyTtlSec: config.mintVerify.ttlSec
+      },
       riskCaps: { openRiskMaxPct: 18, dailyDrawdownMaxPct: 15, impactMaxPct: 3 },
       tokensSeen24h: feeds.tokensSeen24h,
       tokensInserted24h: feeds.tokensInserted24h,
@@ -173,7 +180,9 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
         minScore: config.alerts.minScore,
         rateLimitSec: config.alerts.rateLimitSec,
         summaryEverySec: config.alerts.summaryEverySec,
-        lastAlertTs: getLastAlertTs()
+        lastAlertTs: getLastAlertTs(),
+        lastSummaryTs: getLastSummaryTs(),
+        nextSummaryTs: getNextSummaryTs()
       }
     });
   });

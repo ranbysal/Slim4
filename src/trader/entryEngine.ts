@@ -186,12 +186,20 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
       }
     }
 
+    // UPSERT on (market,type) to upgrade prior rejected row to accepted dry_run
     try {
-      const insert = d.prepare(
-        `INSERT OR IGNORE INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
-         VALUES (@market, @side, @type, @status, @quantity_base, @price, NULL, @mint, @origin, @decided_ts, @size_tier, @notes)`
+      const upsert = d.prepare(
+        `INSERT INTO orders (market, side, type, status, quantity_base, price, position_id, mint, origin, decided_ts, size_tier, notes)
+         VALUES (@market, @side, @type, @status, @quantity_base, @price, NULL, @mint, @origin, @decided_ts, @size_tier, @notes)
+         ON CONFLICT(market, type)
+         DO UPDATE SET
+           status=excluded.status,
+           size_tier=excluded.size_tier,
+           decided_ts=excluded.decided_ts,
+           notes=excluded.notes
+         WHERE orders.type='unitary-entry' AND orders.status!='dry_run'`
       );
-      insert.run({
+      upsert.run({
         market: mint,
         side: 'buy',
         type: 'unitary-entry',
@@ -207,6 +215,7 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
     } catch {}
 
     // Update state and alert for accepts only
+    const wasAccepted = st.lastDecision === 'accepted_small' || st.lastDecision === 'accepted_apex';
     st.lastAcceptedTs = nowTs;
     st.lastDecision = decidedTier === 'APEX' ? 'accepted_apex' : 'accepted_small';
     try {
@@ -215,7 +224,8 @@ export async function evaluateMint(mint: string, origin: Origin, nowTs: number, 
       await sendDecisionAlert(config, decision as any, snapshot);
     } catch {}
     try {
-      if (status === 'dry_run' && !(st.lastDecision === 'accepted_small' || st.lastDecision === 'accepted_apex')) recordHeatAccept(mint, nowTs);
+      // single-accept: only record first transition non-accepted -> accepted
+      if (status === 'dry_run' && !wasAccepted) recordHeatAccept(mint, nowTs);
     } catch {}
   } catch (e) {
     logger.warn('evaluateMint error:', (e as Error)?.message ?? e);

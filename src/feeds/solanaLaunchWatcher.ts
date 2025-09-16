@@ -1,13 +1,14 @@
 import Database from 'better-sqlite3';
 import { Connection, LogsCallback, PublicKey } from '@solana/web3.js';
 import { AppConfig, Origin, config } from '../config';
-import { trackFirstN } from '../microstructure/firstNBlocks';
+import { trackFirstN, getSnapshot } from '../microstructure/firstNBlocks';
 import { hitCohort } from '../alpha/cohort';
 import { evaluateMint } from '../trader/entryEngine';
 import { logger } from '../utils/logger';
 import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms, incDropInvalidMint, incDropDuplicateInBatch, incDropNotMint } from './state';
 import { sendTelegram } from '../utils/telegram';
 import { isRealSplMint } from './mintVerifier';
+import { extractMintAndBuyerFromSignature } from './txIntrospect';
 
 type EndpointSet = 'primary' | 'backup';
 
@@ -187,21 +188,61 @@ export class SolanaLaunchWatcher {
             }
             rec.mints.add(evt.mint);
           }
-          // Verify top candidate is an SPL Mint; never fall back to program id.
+          // Optional tx introspection for pumpfun (precision mint + buyer)
           try {
-            const ok = await isRealSplMint(this.conn!, evt.mint);
-            if (!ok) {
+            if (sig && origin === 'pumpfun' && config.txLookup.mode !== 'off') {
+              const info = await extractMintAndBuyerFromSignature(this.conn!, sig, origin, evt.ts);
+              if (info?.mint) {
+                evt.mint = info.mint;
+                if (info?.buyer) {
+                  // attach found buyer for downstream use
+                  // not stored in evt, but used below via trackFirstN/hitCohort
+                  (evt as any)._buyer = info.buyer;
+                }
+              } else {
+                // Augment-only fallback: don't drop on miss; keep parsed evt.mint
+                // Optional: track miss reason without gating
+                // (previously: incDropTxNoMint())
+              }
+            }
+          } catch {}
+          // Mint verification guardrails: eager | deferred | off
+          const mv = config.mintVerify.mode;
+          if (mv === 'eager') {
+            try {
+              const ok = await isRealSplMint(this.conn!, evt.mint);
+              if (!ok) {
+                incDropNotMint();
+                return;
+              }
+            } catch {
               incDropNotMint();
               return;
             }
-          } catch {
-            incDropNotMint();
-            return;
+          } else if (mv === 'deferred') {
+            // Only verify after min-obs & sameFunderRatio<=0.70
+            try {
+              const snap = getSnapshot(evt.mint);
+              const meetsObs = (snap.buyers >= config.entry.minObsBuyers) && (snap.uniqueFunders >= config.entry.minObsUnique);
+              const okSafety = (snap.sameFunderRatio <= 0.70);
+              if (meetsObs && okSafety) {
+                const ok = await isRealSplMint(this.conn!, evt.mint);
+                if (!ok) {
+                  incDropNotMint();
+                  return;
+                }
+              }
+              // else: skip verify for now (no drop)
+            } catch {
+              // skip verification on errors (no drop)
+            }
+          } else {
+            // 'off': skip isRealSplMint entirely
           }
           // microstructure ingest (best-effort, non-blocking)
           try {
             const tr = trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')) as { buyer?: string } | void;
-            const buyer = (tr as any)?.buyer as string | undefined;
+            const buyer = (evt as any)._buyer || (tr as any)?.buyer as string | undefined;
             if (buyer && isLikelyBuyer(buyer)) {
               try { hitCohort(evt.mint, buyer, evt.ts); } catch {}
             }

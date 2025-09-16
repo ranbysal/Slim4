@@ -4,7 +4,7 @@ import { config } from './config';
 import { logger } from './utils/logger';
 import { createStatusRouter } from './status/statusRouter';
 import { SolanaLaunchWatcher } from './feeds/solanaLaunchWatcher';
-import { sendTelegram } from './utils/telegram';
+import { sendTelegram, ensureSummaryTimer } from './utils/telegram';
 
 function applyPragmas(db: Database.Database) {
   db.pragma('journal_mode = WAL');
@@ -24,6 +24,8 @@ app.use('/', createStatusRouter(db, config));
 const server = app.listen(config.port, async () => {
   logger.info(`Slim4 server listening on :${config.port}`);
   try {
+    // Start summary ticker on startup if enabled
+    ensureSummaryTimer(config);
     await sendTelegram(config, 'Slim4 online');
   } catch {}
 });
