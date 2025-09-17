@@ -11,8 +11,10 @@
     "db:init": "ts-node src/db/init.ts"
   },
   "dependencies": {
+    "@pump-fun/pump-sdk": "^1.18.7",
     "@solana/web3.js": "*",
     "better-sqlite3": "*",
+    "bn.js": "^5.2.2",
     "dotenv": "*",
     "express": "*",
     "jito-ts": "*",
@@ -20,8 +22,8 @@
     "zod": "*"
   },
   "devDependencies": {
-    "@types/express": "*",
     "@types/better-sqlite3": "*",
+    "@types/express": "*",
     "@types/node": "*",
     "ts-node": "*",
     "ts-node-dev": "*",

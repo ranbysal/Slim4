@@ -47,6 +47,15 @@ type MintState = {
   funderCounts: Map<string, number>;
   priceJumps: number;
   lastPrice?: number;
+  lastEmitTs?: number;
+  lastSnapshot?: {
+    buyers: number;
+    uniqueFunders: number;
+    sameFunderRatio: number;
+    priceJumps: number;
+    depthEst: number;
+    lastTs: number;
+  };
 };
 
 const states: Map<string, MintState> = new Map();
@@ -84,7 +93,7 @@ export function trackFirstN(
   origin: Origin,
   logTs: number,
   rawLog: string
-): { buyer?: string } | void {
+): { buyer?: string; snapshot: { buyers: number; uniqueFunders: number; sameFunderRatio: number; priceJumps: number; depthEst: number; lastTs: number; changed: boolean } } | void {
   if (!mint) return;
   if (!isValidMint(mint)) {
     // Count drops for program-id-as-mint scenarios
@@ -122,8 +131,31 @@ export function trackFirstN(
   // Cap memory per mint to a small window (e.g. last 100 events)
   if (st.events.length > 100) st.events.shift();
 
-  // Expose buyer/pubkey if present
-  if (funder) return { buyer: funder };
+  // Compute snapshot and detect material change
+  const snap = getSnapshot(mint);
+  const prev = st.lastSnapshot;
+  const tNow = now;
+  let changed = false;
+  const emitEveryMs = 5000;
+  if (!prev) {
+    changed = true;
+  } else {
+    const buyersChanged = snap.buyers !== prev.buyers;
+    const uniqueChanged = snap.uniqueFunders !== prev.uniqueFunders;
+    const jumpsChanged = snap.priceJumps !== prev.priceJumps;
+    const depthChanged = Math.abs(snap.depthEst - prev.depthEst) >= 0.02;
+    const sameChanged = Math.abs(snap.sameFunderRatio - prev.sameFunderRatio) >= 0.02;
+    const timeElapsed = (st.lastEmitTs ? (tNow - st.lastEmitTs) : emitEveryMs + 1) >= emitEveryMs;
+    changed = buyersChanged || uniqueChanged || depthChanged || sameChanged || jumpsChanged || timeElapsed;
+  }
+  if (changed) {
+    st.lastEmitTs = tNow;
+    st.lastSnapshot = { ...snap };
+  }
+
+  // Expose buyer/pubkey if present, and snapshot+changed flag
+  if (funder) return { buyer: funder, snapshot: { ...snap, changed } };
+  return { snapshot: { ...snap, changed } };
 }
 
 export function getSnapshot(mint: string): {

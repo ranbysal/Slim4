@@ -37,6 +37,12 @@ const EnvSchema = z.object({
   MINT_VERIFY_MODE: z.enum(["off", "deferred", "eager"]).default("deferred"),
   MINT_VERIFY_TTL_SEC: z.coerce.number().int().min(60).max(24 * 60 * 60).default(3600)
   ,
+  // Quotes sampler
+  QUOTES_ENABLED: z.coerce.boolean().default(true),
+  QUOTES_SIZES_SOL: z.string().default("0.05,0.1,0.2"),
+  QUOTES_INTERVAL_MS: z.coerce.number().int().min(1000).max(60 * 60 * 1000).default(8000),
+  QUOTES_MAX_MINUTES: z.coerce.number().int().min(1).max(24 * 60).default(15)
+  ,
   // Unitary Entry Engine / Dry run
   DRY_RUN: z.coerce.boolean().default(true),
   SIZE_SMALL_USD: z.coerce.number().default(30),
@@ -121,6 +127,12 @@ export type AppConfig = Readonly<{
     mode: 'off' | 'deferred' | 'eager';
     ttlSec: number;
   }>;
+  quotes: Readonly<{
+    enabled: boolean;
+    sizesSol: number[];
+    intervalMs: number;
+    maxMinutes: number;
+  }>;
   dryRun: boolean;
   sizes: Readonly<{ smallUsd: number; apexUsd: number }>;
   entry: Readonly<{
@@ -158,6 +170,16 @@ function parseCsvPrograms(raw: string): string[] {
         .filter(s => s.length >= 32 && s.length <= 44)
     )
   );
+}
+
+function parseCsvNumbers(raw: string): number[] {
+  if (!raw) return [];
+  const out: number[] = [];
+  for (const p of raw.split(',')) {
+    const v = Number((p || '').trim());
+    if (Number.isFinite(v)) out.push(v);
+  }
+  return out;
 }
 
 export const config: AppConfig = Object.freeze({
@@ -201,6 +223,12 @@ export const config: AppConfig = Object.freeze({
   mintVerify: {
     mode: parsed.MINT_VERIFY_MODE,
     ttlSec: parsed.MINT_VERIFY_TTL_SEC
+  },
+  quotes: {
+    enabled: parsed.QUOTES_ENABLED,
+    sizesSol: parseCsvNumbers(parsed.QUOTES_SIZES_SOL),
+    intervalMs: parsed.QUOTES_INTERVAL_MS,
+    maxMinutes: parsed.QUOTES_MAX_MINUTES
   },
   dryRun: parsed.DRY_RUN,
   sizes: { smallUsd: parsed.SIZE_SMALL_USD, apexUsd: parsed.SIZE_APEX_USD },

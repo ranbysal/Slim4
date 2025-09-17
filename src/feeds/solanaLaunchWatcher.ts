@@ -5,10 +5,14 @@ import { trackFirstN, getSnapshot } from '../microstructure/firstNBlocks';
 import { hitCohort } from '../alpha/cohort';
 import { evaluateMint } from '../trader/entryEngine';
 import { logger } from '../utils/logger';
-import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms, incDropInvalidMint, incDropDuplicateInBatch, incDropNotMint } from './state';
+import { incInserted, incSeen, incByOrigin, setLastEventTs, setSubscribedPrograms, incDropInvalidMint, incDropDuplicateInBatch, incDropNotMint, incPumpfunParserHit, incPumpfunParserMiss, incMoonshotParserHit, incMoonshotParserMiss } from './state';
 import { sendTelegram } from '../utils/telegram';
+import { saveEvent, saveQuotes, setMetricsDb } from '../db/metricsWriter';
+import { estimateQuote } from '../quote/pumpfunEstimator';
 import { isRealSplMint } from './mintVerifier';
 import { extractMintAndBuyerFromSignature } from './txIntrospect';
+import { parsePumpfun } from './parsers/pumpfun';
+import { parseMoonshot } from './parsers/moonshot';
 
 type EndpointSet = 'primary' | 'backup';
 
@@ -67,11 +71,14 @@ export class SolanaLaunchWatcher {
   private onReconnectLoopAlerted = false;
   private stopped = false;
   private seenMintsBySignature: Map<string, { mints: Set<string>; ts: number }> = new Map();
+  private lastEventWriteByMint: Map<string, number> = new Map();
+  private quoteSamplers: Map<string, NodeJS.Timeout> = new Map();
   // Entry engine now self-enforces re-evaluation cooldowns
 
   constructor(db: Database.Database, config: AppConfig) {
     this.db = db;
     this.config = config;
+    try { setMetricsDb(db); } catch {}
     this.ensureSchema();
   }
 
@@ -89,6 +96,35 @@ export class SolanaLaunchWatcher {
       );
       CREATE INDEX IF NOT EXISTS idx_tokens_last_seen ON tokens(last_seen_ts);
       CREATE INDEX IF NOT EXISTS idx_tokens_origin ON tokens(origin);
+
+      CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY,
+        ts INTEGER NOT NULL,
+        signature TEXT,
+        mint TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        buyers INTEGER,
+        unique_funders INTEGER,
+        same_funder_ratio REAL,
+        price_jumps INTEGER,
+        depth_est REAL,
+        creator TEXT,
+        snapshot_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_mint_ts ON events(mint, ts);
+
+      CREATE TABLE IF NOT EXISTS quotes (
+        ts INTEGER NOT NULL,
+        mint TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        route TEXT NOT NULL,
+        size_sol REAL NOT NULL,
+        est_fill_price_sol REAL,
+        est_slippage_bps REAL,
+        reserves_json TEXT,
+        PRIMARY KEY (mint, ts, size_sol)
+      );
+      CREATE INDEX IF NOT EXISTS idx_quotes_mint_ts ON quotes(mint, ts);
     `);
   }
 
@@ -166,10 +202,26 @@ export class SolanaLaunchWatcher {
       const programId = new PublicKey(programIdStr);
       const cb: LogsCallback = async (logs) => {
         try {
-          const evt = this.parseLogs(programIdStr, origin, logs.logs);
+          // Precision parsers (zero-RPC) by origin
+          const sig = (logs as any)?.signature as string | undefined;
+          let preferredMint: string | undefined;
+          let parserBuyer: string | undefined;
+          let parserCreator: string | undefined;
+          if (origin === 'pumpfun') {
+            const r = parsePumpfun(logs.logs || [], sig || '');
+            if (r.mint) { preferredMint = r.mint; incPumpfunParserHit(); } else { incPumpfunParserMiss(); }
+            if (r.buyer) parserBuyer = r.buyer;
+            if (r.creator) parserCreator = r.creator;
+          } else if (origin === 'moonshot') {
+            const r = parseMoonshot(logs.logs || [], sig || '');
+            if (r.mint) { preferredMint = r.mint; incMoonshotParserHit(); } else { incMoonshotParserMiss(); }
+            if (r.buyer) parserBuyer = r.buyer;
+            if (r.creator) parserCreator = r.creator;
+          }
+
+          const evt = this.parseLogs(programIdStr, origin, logs.logs, preferredMint, parserCreator);
           if (!evt) return;
           // De-dupe the same mint within the same log batch (by signature)
-          const sig = (logs as any)?.signature as string | undefined;
           if (sig) {
             const now = Date.now();
             // prune old signatures (> 60s)
@@ -190,7 +242,8 @@ export class SolanaLaunchWatcher {
           }
           // Optional tx introspection for pumpfun (precision mint + buyer)
           try {
-            if (sig && origin === 'pumpfun' && config.txLookup.mode !== 'off') {
+            const hadParserMint = !!preferredMint;
+            if (sig && origin === 'pumpfun' && config.txLookup.mode !== 'off' && !hadParserMint) {
               const info = await extractMintAndBuyerFromSignature(this.conn!, sig, origin, evt.ts);
               if (info?.mint) {
                 evt.mint = info.mint;
@@ -241,10 +294,44 @@ export class SolanaLaunchWatcher {
           }
           // microstructure ingest (best-effort, non-blocking)
           try {
-            const tr = trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')) as { buyer?: string } | void;
-            const buyer = (evt as any)._buyer || (tr as any)?.buyer as string | undefined;
+            const tr = trackFirstN(evt.mint, origin, evt.ts, (logs.logs || []).join('\n')) as
+              | { buyer?: string; snapshot?: { buyers: number; uniqueFunders: number; sameFunderRatio: number; priceJumps: number; depthEst: number; lastTs: number; changed: boolean } }
+              | void;
+            const buyer = parserBuyer || (evt as any)._buyer || (tr as any)?.buyer as string | undefined;
             if (buyer && isLikelyBuyer(buyer)) {
               try { hitCohort(evt.mint, buyer, evt.ts); } catch {}
+            }
+            // Best-effort event recorder (throttled per mint)
+            const snap = (tr as any)?.snapshot as
+              | { buyers: number; uniqueFunders: number; sameFunderRatio: number; priceJumps: number; depthEst: number; lastTs: number; changed: boolean }
+              | undefined;
+            if (snap && snap.changed) {
+              const lastW = this.lastEventWriteByMint.get(evt.mint) || 0;
+              if (evt.ts - lastW >= 5000) {
+                this.lastEventWriteByMint.set(evt.mint, evt.ts);
+                try {
+                  saveEvent({
+                    ts: evt.ts,
+                    signature: sig,
+                    mint: evt.mint,
+                    origin,
+                    buyers: snap.buyers,
+                    unique: snap.uniqueFunders,
+                    same: snap.sameFunderRatio,
+                    priceJumps: snap.priceJumps,
+                    depth: snap.depthEst,
+                    creator: evt.creator,
+                    snapshot: snap
+                  });
+                } catch {}
+              }
+              // Start quote sampler once minObs thresholds are met
+              try {
+                if (this.config.quotes.enabled) {
+                  const meetsObs = snap.buyers >= this.config.entry.minObsBuyers && snap.uniqueFunders >= this.config.entry.minObsUnique;
+                  if (meetsObs) this.ensureQuoteSampler(evt.mint, origin, evt.creator || null, evt.ts);
+                }
+              } catch {}
             }
           } catch {}
           // Evaluate unitary entry decision (engine enforces its own cooldowns)
@@ -262,14 +349,21 @@ export class SolanaLaunchWatcher {
     }
   }
 
-  private parseLogs(programId: string, origin: Origin, logs: string[]): ParsedTokenEvent | null {
+  private parseLogs(
+    programId: string,
+    origin: Origin,
+    logs: string[],
+    preferredMint?: string,
+    preferredCreator?: string
+  ): ParsedTokenEvent | null {
     // Heuristic regex-based parse to extract mint/name/symbol/creator from logs if present.
     const ts = Date.now();
     const text = logs.join('\n');
     const b58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
     const candidates = Array.from(text.matchAll(b58)).map(m => m[0]).filter((v, i, a) => a.indexOf(v) === i);
-    // Try to pick a plausible mint-like key (first candidate).
-    const mint = candidates[0];
+    // Try to pick a plausible mint-like key (prefer parser override if valid; else first candidate).
+    const chosen = (preferredMint && isValidMint(preferredMint)) ? preferredMint : candidates[0];
+    const mint = chosen;
     if (!mint) return null;
     if (!isValidMint(mint)) {
       incDropInvalidMint();
@@ -285,7 +379,7 @@ export class SolanaLaunchWatcher {
       candidates,
       name: nameMatch?.[1],
       symbol: symbolMatch?.[1],
-      creator: creatorMatch?.[1] || candidates.find(c => c !== mint),
+      creator: preferredCreator || creatorMatch?.[1] || candidates.find(c => c !== mint),
       origin
     };
     return evt;
@@ -367,6 +461,62 @@ export class SolanaLaunchWatcher {
       await this.stop();
     } catch {}
     await this.connectAndSubscribe(which);
+  }
+
+  private ensureQuoteSampler(mint: string, origin: Origin, creator: string | null, nowTs: number) {
+    if (!this.config.quotes.enabled) return;
+    if (origin !== 'pumpfun') return; // only pumpfun quotes for now
+    if (this.quoteSamplers.has(mint)) return; // already running
+    const startTs = nowTs || Date.now();
+    const intervalMs = Math.max(1000, this.config.quotes.intervalMs || 8000);
+    const maxMs = Math.max(60_000, (this.config.quotes.maxMinutes || 15) * 60_000);
+    const sizes = (this.config.quotes.sizesSol && this.config.quotes.sizesSol.length > 0)
+      ? this.config.quotes.sizesSol
+      : [0.05, 0.1, 0.2];
+    const tick = async () => {
+      const now = Date.now();
+      // Stop if exceeded max duration
+      if (now - startTs > maxMs) { this.stopQuoteSampler(mint); return; }
+      // Stop if traffic died (>60s since last micro event)
+      try {
+        const s = getSnapshot(mint);
+        if (!s?.lastTs || now - s.lastTs > 60_000) { this.stopQuoteSampler(mint); return; }
+      } catch {}
+      try {
+        const samples: Array<{ ts: number; mint: string; origin: string; route: 'pumpfun'; sizeSol: number; estFillPriceSol: number | null; estSlippageBps: number | null; reserves?: any }>
+          = [];
+        for (const size of sizes) {
+          try {
+            const est = await estimateQuote(mint, size, now);
+            samples.push({
+              ts: now,
+              mint,
+              origin,
+              route: 'pumpfun',
+              sizeSol: size,
+              estFillPriceSol: est?.estFillPriceSol ?? null,
+              estSlippageBps: est?.estSlippageBps ?? null,
+              reserves: est?.reserves
+            });
+          } catch {
+            // push nulls to reflect attempt
+            samples.push({ ts: now, mint, origin, route: 'pumpfun', sizeSol: size, estFillPriceSol: null, estSlippageBps: null });
+          }
+        }
+        saveQuotes(samples);
+      } catch {}
+    };
+    // schedule interval
+    const t = setInterval(tick, intervalMs);
+    this.quoteSamplers.set(mint, t);
+    // run first tick soon-ish (stagger a bit)
+    setTimeout(tick, Math.floor(intervalMs / 2));
+  }
+
+  private stopQuoteSampler(mint: string) {
+    const t = this.quoteSamplers.get(mint);
+    if (t) { try { clearInterval(t); } catch {} }
+    this.quoteSamplers.delete(mint);
   }
 
 }

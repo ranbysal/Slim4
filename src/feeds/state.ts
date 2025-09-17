@@ -2,6 +2,8 @@ import type { Origin } from '../config';
 
 let tokensSeen24h = 0;
 let tokensInserted24h = 0;
+let eventsWritten24h = 0;
+let quotesWritten24h = 0;
 const dropCounters = {
   invalidMint: 0,
   duplicateInBatch: 0,
@@ -23,12 +25,26 @@ const byOrigin: Record<Origin, number> = {
   orca: 0
 };
 
+// Precision parser hit/miss counters
+const parserCounters = {
+  pumpfunHits: 0,
+  pumpfunMiss: 0,
+  moonshotHits: 0,
+  moonshotMiss: 0
+};
+
+// Quote write/error counters (lifetime in-process)
+let quotesWritten = 0;
+let quotesErrors = 0;
+
 function maybeReset() {
   const now = Date.now();
   const elapsed = now - lastReset;
   if (elapsed > 24 * 60 * 60 * 1000) {
     tokensSeen24h = 0;
     tokensInserted24h = 0;
+    eventsWritten24h = 0;
+    quotesWritten24h = 0;
     lastReset = now;
   }
 }
@@ -68,7 +84,9 @@ export function getFeedStatus() {
     lastEventTs,
     tokensSeen24h,
     tokensInserted24h,
-    dropCounters: { ...dropCounters }
+    dropCounters: { ...dropCounters },
+    parserCounters: { ...parserCounters },
+    quotes: { written: quotesWritten, errors: quotesErrors }
   };
 }
 
@@ -95,4 +113,39 @@ export function incTxCacheHit() {
 
 export function incTxFetchErr() {
   dropCounters.txFetchErr += 1;
+}
+
+// Parser counters helpers
+export function incPumpfunParserHit() {
+  parserCounters.pumpfunHits += 1;
+}
+export function incPumpfunParserMiss() {
+  parserCounters.pumpfunMiss += 1;
+}
+export function incMoonshotParserHit() {
+  parserCounters.moonshotHits += 1;
+}
+export function incMoonshotParserMiss() {
+  parserCounters.moonshotMiss += 1;
+}
+
+// Recorder counters
+export function incEventsWritten24h(n: number) {
+  maybeReset();
+  eventsWritten24h += Math.max(0, n || 0);
+}
+export function incQuotesWritten24h(n: number) {
+  maybeReset();
+  quotesWritten24h += Math.max(0, n || 0);
+}
+export function incQuotesWritten(n: number) {
+  quotesWritten += Math.max(0, n || 0);
+}
+export function incQuotesErrors(n: number) {
+  quotesErrors += Math.max(0, n || 0);
+}
+
+export function getRecorder24h() {
+  maybeReset();
+  return { eventsWritten24h, quotesWritten24h };
 }

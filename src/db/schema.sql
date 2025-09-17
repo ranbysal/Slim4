@@ -84,3 +84,34 @@ CREATE TABLE IF NOT EXISTS jito_tips_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jito_tips_day ON jito_tips_ledger(budget_day);
+
+-- Microstructure events
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  signature TEXT,
+  mint TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  buyers INTEGER,
+  unique_funders INTEGER,
+  same_funder_ratio REAL,
+  price_jumps INTEGER,
+  depth_est REAL,
+  creator TEXT,
+  snapshot_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_events_mint_ts ON events(mint, ts);
+
+-- Quote snapshots (pumpfun only for now)
+CREATE TABLE IF NOT EXISTS quotes (
+  ts INTEGER NOT NULL,
+  mint TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  route TEXT NOT NULL,         -- 'pumpfun'
+  size_sol REAL NOT NULL,      -- e.g. 0.05, 0.10, 0.20
+  est_fill_price_sol REAL,     -- avg fill
+  est_slippage_bps REAL,
+  reserves_json TEXT,
+  PRIMARY KEY (mint, ts, size_sol)
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_mint_ts ON quotes(mint, ts);

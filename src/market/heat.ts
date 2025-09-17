@@ -115,8 +115,8 @@ export function getEffectiveThresholds(nowTs: number): {
   const ceilBuyers = config.heat.ceil.buyers;
 
   // Cold-tape effective floors (do not change apex floor)
-  // When band === COLD, apply floors: minScore:45, minBuyers:5, minUnique:4
-  const coldFloorScore = Math.max(floorScore, 45);
+  // When band === COLD, apply floors: minScore:40, minBuyers:5, minUnique:4
+  const coldFloorScore = Math.max(floorScore, 40);
   const coldFloorBuyers = Math.max(floorBuyers, 5);
   const coldFloorUnique = Math.max(4, Math.max(0, floorBuyers - 1));
 

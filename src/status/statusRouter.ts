@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import Database from 'better-sqlite3';
 import { AppConfig } from '../config';
-import { getFeedCounters, getFeedStatus } from '../feeds/state';
+import { getFeedCounters, getFeedStatus, getRecorder24h } from '../feeds/state';
 import { getSummary as getMicroSummary, resetExpired as resetMicroExpired } from '../microstructure/firstNBlocks';
 import { getCohortStatus } from '../alpha/cohort';
 import { getDeployerGrStatus } from '../alpha/deployerGr';
@@ -133,6 +133,7 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
 
     const cohort = getCohortStatus();
     const grStatus = getDeployerGrStatus();
+    const recorder = getRecorder24h();
 
     res.json({
       schemaVersion,
@@ -154,8 +155,11 @@ export function createStatusRouter(db: Database.Database, config: AppConfig) {
         subscribedPrograms: feedStatus.subscribedPrograms,
         byOrigin: feedStatus.byOrigin,
         lastEventTs: feedStatus.lastEventTs,
-        dropCounters: feedStatus.dropCounters
+        dropCounters: feedStatus.dropCounters,
+        parserCounters: feedStatus.parserCounters,
+        quotes: feedStatus.quotes
       },
+      recorder: recorder,
       decisions: {
         dryRun: config.dryRun,
         dryRunAccepted24h,
