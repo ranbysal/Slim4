@@ -47,29 +47,21 @@ def load_events(db_path: str, start_ts: int | None, end_ts: int | None) -> Dict[
     con.row_factory = sqlite3.Row
     cur = con.cursor()
 
-    table = _find_table(cur, ["events", "snapshots", "observations", "obs"])
-    cols = set(_row_columns(cur, table))
-
-    # Required logical columns (attempt best-effort mappings)
-    def pick(*names: str) -> str:
-        for n in names:
-            if n in cols:
-                return n
-        raise RuntimeError(f"Missing required column in {table}: one of {names}")
-
-    c_mint = pick("mint", "mint_address", "token", "asset")
-    c_ts = pick("ts", "timestamp", "time")
-    c_buy = pick("buyers", "obs_buyers", "n_buyers")
-    c_uni = pick("unique", "obs_unique", "n_unique")
-    c_same = pick("same", "same_funder", "same_funders", "same_funder_count")
-    c_pj = pick("price_jumps", "jumps", "num_jumps")
-    c_depth = pick("depth", "liq_depth", "orderbook_depth", "ob_depth")
-    c_origin = pick("origin", "src", "source")
-
     rows = cur.execute(
-        f"SELECT {c_mint} AS mint, {c_ts} AS ts, {c_buy} AS buyers, {c_uni} AS unique, "
-        f"{c_same} AS same, {c_pj} AS price_jumps, {c_depth} AS depth, {c_origin} AS origin "
-        f"FROM {table} ORDER BY ts ASC"
+        """
+        SELECT
+          mint,
+          ts,
+          buyers,
+          unique_funders            AS unique_count,
+          CAST(ROUND(same_funder_ratio * buyers) AS INTEGER) AS same_count,
+          price_jumps,
+          depth_est                 AS depth,
+          origin
+        FROM events
+        WHERE origin='pumpfun'
+        ORDER BY ts
+    """
     ).fetchall()
 
     out: Dict[str, List[dict]] = defaultdict(list)
@@ -79,12 +71,16 @@ def load_events(db_path: str, start_ts: int | None, end_ts: int | None) -> Dict[
             continue
         if end_ts is not None and ts > end_ts:
             continue
+        buyers = int(r["buyers"]) if r["buyers"] is not None else 0
+        unique = int(r["unique_count"]) if r["unique_count"] is not None else 0
+        same_val = int(r["same_count"]) if r["same_count"] is not None else 0
+
         out[str(r["mint"])].append(
             {
                 "ts": ts,
-                "buyers": int(r["buyers"]) if r["buyers"] is not None else 0,
-                "unique": int(r["unique"]) if r["unique"] is not None else 0,
-                "same": int(r["same"]) if r["same"] is not None else 0,
+                "buyers": buyers,
+                "unique": unique,
+                "same": same_val,
                 "price_jumps": int(r["price_jumps"]) if r["price_jumps"] is not None else 0,
                 "depth": float(r["depth"]) if r["depth"] is not None else 0.0,
                 "origin": str(r["origin"]) if r["origin"] is not None else "",
@@ -124,8 +120,10 @@ def load_quotes(db_path: str, sizes: List[float]) -> Dict[str, List[dict]]:
 
     # Load all and filter in Python to be resilient to float matching
     rows = cur.execute(
-        f"SELECT {c_mint} AS mint, {c_ts} AS ts, {c_size} AS size_sol, {c_price} AS est_fill_price_sol "
-        f"FROM {table} ORDER BY ts ASC"
+        f"SELECT q.{c_mint} AS mint, q.{c_ts} AS ts, q.{c_size} AS size_sol, q.{c_price} AS est_fill_price_sol "
+        f"FROM {table} AS q "
+        f"JOIN (SELECT DISTINCT mint FROM events WHERE origin='pumpfun') AS e ON e.mint = q.{c_mint} "
+        f"ORDER BY q.{c_ts} ASC"
     ).fetchall()
 
     wanted = [round(float(s), 6) for s in sizes]
@@ -147,4 +145,3 @@ def load_quotes(db_path: str, sizes: List[float]) -> Dict[str, List[dict]]:
 
     con.close()
     return dict(out)
-

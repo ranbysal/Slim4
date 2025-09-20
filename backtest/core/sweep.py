@@ -32,6 +32,9 @@ def sweep_grid(
     rows: List[Dict[str, Any]] = []
     best = None
     best_score = None
+    # Track unconstrained best as fallback so best.json is never empty
+    best_any = None
+    best_any_score = None
 
     for override in _param_product(grid):
         params = dict(base_params)
@@ -44,7 +47,13 @@ def sweep_grid(
         }
         rows.append(row)
 
-        # Constraint check
+        # Update unconstrained best
+        score_any = float(metrics.get("total_pnl_sol", 0.0) or 0.0)
+        if best_any is None or score_any > best_any_score:
+            best_any = row
+            best_any_score = score_any
+
+        # Constraint check for primary selection
         t = metrics.get("trades", 0)
         dd = float(metrics.get("max_drawdown", 0.0) or 0.0)
         if t < int(min_trades) or dd > float(max_drawdown):
@@ -55,5 +64,7 @@ def sweep_grid(
             best = row
             best_score = score
 
+    # Fallback to unconstrained best if constraints yield none
+    if best is None:
+        best = best_any
     return rows, best
-

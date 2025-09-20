@@ -487,7 +487,7 @@ export class SolanaLaunchWatcher {
           = [];
         for (const size of sizes) {
           try {
-            const est = await estimateQuote(mint, size, now);
+            const est = await estimateQuote(this.conn!, mint, size, now);
             samples.push({
               ts: now,
               mint,

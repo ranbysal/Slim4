@@ -1,0 +1,21 @@
+{
+  "metrics": {
+    "avg_hold_sec": 142.38888888888889,
+    "max_drawdown": 0.7340322400446169,
+    "pnl_by_origin": {
+      "pumpfun": 0.053181500698830736
+    },
+    "total_pnl_sol": 0.053181500698830736,
+    "trades": 18,
+    "winrate": 0.5
+  },
+  "params": {
+    "APEX_SCORE_BOOST": 20,
+    "COOLDOWN_SEC": 60,
+    "ENTRY_MIN_SCORE": 35,
+    "MIN_OBS_BUYERS": 2,
+    "MIN_OBS_UNIQUE": 4,
+    "SAME_FUNDER_FATAL": 0.9,
+    "SAME_FUNDER_LIMIT": 0.55
+  }
+}
